@@ -1,0 +1,28 @@
+{
+  "window": {
+    "width": 1000,
+    "height": 700,
+    "title": "Restaurant Concurrency - Productor/Consumidor",
+    "resizable": false,
+    "vsync": true
+  },
+  "restaurant": {
+    "capacidad_barra": 5,
+    "num_cocineros": 1,
+    "num_meseros": 1,
+    "clientes_inicial": 3,
+    "tiempo_coccion_ms": 800,
+    "tiempo_entrega_ms": 600,
+    "max_clientes_spritesheet": 8
+  },
+  "performance": {
+    "target_fps": 60,
+    "enable_debug": true
+  },
+  "logging": {
+    "level": "info",
+    "output": "stdout",
+    "file_path": "logs/restaurant.log",
+    "structured": false
+  }
+}
