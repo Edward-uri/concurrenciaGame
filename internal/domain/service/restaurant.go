@@ -2,165 +2,233 @@ package service
 
 import (
 	"context"
+	"math/rand"
+	"restaurant-concurrency/internal/adapter/secondary/worker"
 	"restaurant-concurrency/internal/domain/model"
-	"restaurant-concurrency/internal/domain/port"
 	"sync"
+	"time"
 )
 
-// RestaurantService implementa la lógica de concurrencia
 type RestaurantService struct {
-	// Dependencias (puertos)
-	producer port.Producer
-	consumer port.Consumer
+	// Canal productor-consumidor (BUFFER)
+	barra          chan model.Plato
+	capacidadBarra int
 
-	// Estado del dominio
-	mu              sync.RWMutex
-	clientesActivos int
-	pausado         bool
-	platosTotales   int
-	platosServidos  int
+	// Mesas y clientes
+	mesas   []*model.Mesa
+	mesasMu sync.RWMutex
 
-	// Infraestructura de concurrencia
-	barra  chan model.Plato
+	// Métricas
+	mu               sync.RWMutex
+	platosTotales    int
+	platosServidos   int
+	clientesPerdidos int
+	pausado          bool
+
+	// Concurrencia
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// Configuración
-	capacidadBarra int
-	numCocineros   int
-	numMeseros     int
+	// Workers (adapters secundarios)
+	cocineros    []*worker.Cocinero
+	numCocineros int
 }
 
-// NewRestaurantService crea el servicio con inyección de dependencias
-func NewRestaurantService(
-	producer port.Producer,
-	consumer port.Consumer,
-	capacidadBarra, numCocineros, numMeseros int,
-) port.RestaurantService {
+func NewRestaurantService(capacidadBarra, numCocineros, numMesas int) *RestaurantService {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &RestaurantService{
-		producer:       producer,
-		consumer:       consumer,
+	service := &RestaurantService{
 		barra:          make(chan model.Plato, capacidadBarra),
-		ctx:            ctx,
-		cancel:         cancel,
 		capacidadBarra: capacidadBarra,
 		numCocineros:   numCocineros,
-		numMeseros:     numMeseros,
+		ctx:            ctx,
+		cancel:         cancel,
+		mesas:          make([]*model.Mesa, 0, numMesas),
+		cocineros:      make([]*worker.Cocinero, 0, numCocineros),
 	}
+
+	// ✅ Crear cocineros AQUÍ (internamente)
+	for i := 1; i <= numCocineros; i++ {
+		service.cocineros = append(service.cocineros, worker.NewCocinero(i))
+	}
+
+	// Crear mesas
+	positions := [][2]float64{
+		{100, 300}, {300, 300}, {500, 300}, {700, 300},
+		{100, 450}, {300, 450}, {500, 450}, {700, 450},
+	}
+
+	for i := 0; i < numMesas && i < len(positions); i++ {
+		mesa := model.NewMesa(i, positions[i][0], positions[i][1], 30*time.Second)
+		service.mesas = append(service.mesas, mesa)
+	}
+
+	return service
 }
 
+// Start inicia todas las goroutines
 func (s *RestaurantService) Start() {
-	// Iniciar productores
-	for i := 1; i <= s.numCocineros; i++ {
+	// Iniciar cocineros
+	for _, cocinero := range s.cocineros {
 		s.wg.Add(1)
-		go func(id int) {
+		go func(c *worker.Cocinero) {
 			defer s.wg.Done()
-			s.producer.Produce(s.ctx, s.barra, id)
-		}(i)
+			c.Producir(s.ctx, s.barra, s.hayDemanda)
+		}(cocinero)
 	}
 
-	// Iniciar consumidores
-	for i := 1; i <= s.numMeseros; i++ {
-		s.wg.Add(1)
-		go func(id int) {
-			defer s.wg.Done()
-			s.consumer.Consume(s.ctx, s.barra, id)
-		}(i)
+	// Generador de clientes
+	s.wg.Add(1)
+	go s.generadorClientes()
+
+	// Verificador de paciencia
+	s.wg.Add(1)
+	go s.verificadorPaciencia()
+}
+
+// hayDemanda verifica si hay clientes esperando (para que cocineros produzcan)
+func (s *RestaurantService) hayDemanda() bool {
+	s.mesasMu.RLock()
+	defer s.mesasMu.RUnlock()
+
+	s.mu.RLock()
+	pausado := s.pausado
+	s.mu.RUnlock()
+
+	if pausado {
+		return false
+	}
+
+	for _, mesa := range s.mesas {
+		if mesa.ClientesActivos > 0 && !mesa.TienePlato {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *RestaurantService) generadorClientes() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			// Agregar clientes aleatoriamente a mesas vacías
+			s.mesasMu.Lock()
+			for _, mesa := range s.mesas {
+				if mesa.ClientesActivos == 0 && rand.Float64() < 0.4 {
+					cantidadClientes := rand.Intn(3) + 1
+					mesa.AgregarClientes(cantidadClientes)
+				}
+			}
+			s.mesasMu.Unlock()
+		}
 	}
 }
 
-func (s *RestaurantService) AgregarClientes(cantidad int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.clientesActivos += cantidad
+func (s *RestaurantService) verificadorPaciencia() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.mesasMu.Lock()
+			for _, mesa := range s.mesas {
+				if mesa.ClientesActivos > 0 && !mesa.EstaPaciente() {
+					// Clientes se fueron por falta de servicio
+					s.mu.Lock()
+					s.clientesPerdidos += mesa.ClientesActivos
+					s.mu.Unlock()
+					mesa.ClientesSatisfechos()
+				}
+			}
+			s.mesasMu.Unlock()
+		}
+	}
 }
 
-func (s *RestaurantService) ClientesSeVan(cantidad int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if cantidad > s.clientesActivos {
-		cantidad = s.clientesActivos
+// IntentarRecogerPlato permite al mesero (jugador) CONSUMIR de la barra
+func (s *RestaurantService) IntentarRecogerPlato() (*model.Plato, bool) {
+	select {
+	case plato := <-s.barra:
+		s.mu.Lock()
+		s.platosTotales++
+		s.mu.Unlock()
+		return &plato, true
+	default:
+		return nil, false
 	}
-	s.clientesActivos -= cantidad
+}
+
+// EntregarPlatoAMesa entrega un plato a una mesa cercana
+func (s *RestaurantService) EntregarPlatoAMesa(meseroX, meseroY float64, rango float64) bool {
+	s.mesasMu.Lock()
+	defer s.mesasMu.Unlock()
+
+	for _, mesa := range s.mesas {
+		if mesa.ClientesActivos > 0 && !mesa.TienePlato {
+			// Verificar distancia
+			dx := mesa.PosX - meseroX
+			dy := mesa.PosY - meseroY
+			distancia := dx*dx + dy*dy
+
+			if distancia < rango*rango {
+				mesa.EntregarPlato()
+				s.mu.Lock()
+				s.platosServidos++
+				s.mu.Unlock()
+
+				// Después de un tiempo, clientes se van satisfechos
+				go func(m *model.Mesa) {
+					time.Sleep(3 * time.Second)
+					s.mesasMu.Lock()
+					m.ClientesSatisfechos()
+					s.mesasMu.Unlock()
+				}(mesa)
+
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *RestaurantService) GetMesas() []*model.Mesa {
+	s.mesasMu.RLock()
+	defer s.mesasMu.RUnlock()
+
+	copia := make([]*model.Mesa, len(s.mesas))
+	copy(copia, s.mesas)
+	return copia
+}
+
+func (s *RestaurantService) GetEstadoBarra() int {
+	return len(s.barra)
+}
+
+func (s *RestaurantService) GetCapacidadBarra() int {
+	return s.capacidadBarra
+}
+
+func (s *RestaurantService) GetMetricas() (totales, servidos, perdidos int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.platosTotales, s.platosServidos, s.clientesPerdidos
 }
 
 func (s *RestaurantService) TogglePausar() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pausado = !s.pausado
-}
-
-// SetProducer permite inyectar o reemplazar el productor en tiempo de ejecución
-func (s *RestaurantService) SetProducer(p port.Producer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.producer = p
-}
-
-// SetConsumer permite inyectar o reemplazar el consumidor en tiempo de ejecución
-func (s *RestaurantService) SetConsumer(c port.Consumer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.consumer = c
-}
-
-func (s *RestaurantService) GetEstado() model.EstadoRestaurant {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return model.EstadoRestaurant{
-		ClientesActivos: s.clientesActivos,
-		PlatosTotales:   s.platosTotales,
-		PlatosServidos:  s.platosServidos,
-		EnBarra:         len(s.barra),
-		CapacidadBarra:  s.capacidadBarra,
-		Pausado:         s.pausado,
-	}
-}
-
-func (s *RestaurantService) GetBarra() []model.Plato {
-	// Solo retorna la cantidad, no los platos reales
-	// (para evitar race conditions con el canal)
-	// La UI puede dibujar basándose en GetEstado().EnBarra
-	return nil
-}
-
-func (s *RestaurantService) IncrementarPlatosTotales() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.platosTotales++
-}
-
-func (s *RestaurantService) IncrementarPlatosServidos() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.platosServidos++
-}
-
-func (s *RestaurantService) DebeProducir() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.clientesActivos > 0 && !s.pausado
-}
-
-// ConsumirPlato intenta tomar un plato de la barra (no bloqueante)
-func (s *RestaurantService) ConsumirPlato() *model.Plato {
-	select {
-	case plato := <-s.barra:
-		return &plato
-	default:
-		return nil // No hay platos disponibles
-	}
-}
-
-// EntregarPlato incrementa el contador de platos servidos
-func (s *RestaurantService) EntregarPlato() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.platosServidos++
 }
 
 func (s *RestaurantService) Close() {
