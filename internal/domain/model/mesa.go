@@ -57,3 +57,25 @@ func (m *Mesa) GetNivelPaciencia() float64 {
 	elapsed := time.Since(m.TiempoEspera)
 	return float64(elapsed) / float64(m.Paciencia)
 }
+
+// MesaSnapshot es una copia inmutable de los datos de Mesa para renderizado thread-safe
+type MesaSnapshot struct {
+	ID              int
+	PosX, PosY      float64
+	ClientesActivos int
+	TienePlato      bool
+	NivelPaciencia  float64
+}
+
+// Snapshot crea una copia thread-safe de los datos de la mesa
+// DEBE ser llamado mientras se tiene el lock de mesasMu
+func (m *Mesa) Snapshot() MesaSnapshot {
+	return MesaSnapshot{
+		ID:              m.ID,
+		PosX:            m.PosX,
+		PosY:            m.PosY,
+		ClientesActivos: m.ClientesActivos,
+		TienePlato:      m.TienePlato,
+		NivelPaciencia:  m.GetNivelPaciencia(),
+	}
+}

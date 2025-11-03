@@ -48,7 +48,7 @@ func NewRestaurantService(capacidadBarra, numCocineros, numMesas int) *Restauran
 		cocineros:      make([]*worker.Cocinero, 0, numCocineros),
 	}
 
-	// ✅ Crear cocineros AQUÍ (internamente)
+	// Crear cocineros (productores en el patrón Productor-Consumidor)
 	for i := 1; i <= numCocineros; i++ {
 		service.cocineros = append(service.cocineros, worker.NewCocinero(i))
 	}
@@ -72,10 +72,7 @@ func (s *RestaurantService) Start() {
 	// Iniciar cocineros
 	for _, cocinero := range s.cocineros {
 		s.wg.Add(1)
-		go func(c *worker.Cocinero) {
-			defer s.wg.Done()
-			c.Producir(s.ctx, s.barra, s.hayDemanda)
-		}(cocinero)
+		go s.ejecutarCocinero(cocinero)
 	}
 
 	// Generador de clientes
@@ -85,6 +82,12 @@ func (s *RestaurantService) Start() {
 	// Verificador de paciencia
 	s.wg.Add(1)
 	go s.verificadorPaciencia()
+}
+
+// ejecutarCocinero es un método helper para evitar función anónima
+func (s *RestaurantService) ejecutarCocinero(cocinero *worker.Cocinero) {
+	defer s.wg.Done()
+	cocinero.Producir(s.ctx, s.barra, s.hayDemanda)
 }
 
 // hayDemanda verifica si hay clientes esperando (para que cocineros produzcan)
@@ -188,12 +191,7 @@ func (s *RestaurantService) EntregarPlatoAMesa(meseroX, meseroY float64, rango f
 				s.mu.Unlock()
 
 				// Después de un tiempo, clientes se van satisfechos
-				go func(m *model.Mesa) {
-					time.Sleep(3 * time.Second)
-					s.mesasMu.Lock()
-					m.ClientesSatisfechos()
-					s.mesasMu.Unlock()
-				}(mesa)
+				go s.limpiarMesaDespuesDeTiempo(mesa, 3*time.Second)
 
 				return true
 			}
@@ -202,13 +200,16 @@ func (s *RestaurantService) EntregarPlatoAMesa(meseroX, meseroY float64, rango f
 	return false
 }
 
-func (s *RestaurantService) GetMesas() []*model.Mesa {
+// GetMesas retorna snapshots inmutables de las mesas (thread-safe para rendering)
+func (s *RestaurantService) GetMesas() []model.MesaSnapshot {
 	s.mesasMu.RLock()
 	defer s.mesasMu.RUnlock()
 
-	copia := make([]*model.Mesa, len(s.mesas))
-	copy(copia, s.mesas)
-	return copia
+	snapshots := make([]model.MesaSnapshot, len(s.mesas))
+	for i, mesa := range s.mesas {
+		snapshots[i] = mesa.Snapshot()
+	}
+	return snapshots
 }
 
 func (s *RestaurantService) GetEstadoBarra() int {
@@ -229,6 +230,20 @@ func (s *RestaurantService) TogglePausar() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pausado = !s.pausado
+}
+
+// limpiarMesaDespuesDeTiempo limpia la mesa después de un tiempo especificado
+// Usa time.After con select en lugar de time.Sleep para respetar cancelación
+func (s *RestaurantService) limpiarMesaDespuesDeTiempo(mesa *model.Mesa, duracion time.Duration) {
+	select {
+	case <-time.After(duracion):
+		s.mesasMu.Lock()
+		mesa.ClientesSatisfechos()
+		s.mesasMu.Unlock()
+	case <-s.ctx.Done():
+		// Si se cancela el contexto, no limpiar la mesa
+		return
+	}
 }
 
 func (s *RestaurantService) Close() {

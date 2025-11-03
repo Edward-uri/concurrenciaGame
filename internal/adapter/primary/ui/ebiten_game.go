@@ -47,13 +47,19 @@ func NewGame(service *service.RestaurantService, width, height int) (*Game, erro
 }
 
 func (g *Game) setupCallbacks() {
+	// Pasar métodos directamente en lugar de funciones anónimas
 	g.inputHandler.SetCallbacks(
-		func() { g.service.TogglePausar() }, // Pausar
-		nil,                                 // Ya no agregamos clientes manualmente
-		nil,                                 // Ya no removemos clientes manualmente
-		func() { /* Cerrar */ },
+		g.service.TogglePausar, // Pausar - método directo
+		nil,                    // Ya no agregamos clientes manualmente
+		nil,                    // Ya no removemos clientes manualmente
+		g.handleClose,          // Cerrar - método helper
 		nil,
 	)
+}
+
+// handleClose maneja el cierre del juego
+func (g *Game) handleClose() {
+	// Aquí se puede agregar lógica de cierre si es necesaria
 }
 
 func (g *Game) Update() error {
@@ -84,31 +90,31 @@ func (g *Game) Update() error {
 
 	g.mesero.Mover(dx, dy, 1.0/60.0)
 
-	// Recoger plato de la barra con E (usar inputHandler para IsKeyJustPressed)
+	// Recoger plato de la barra con E
 	if g.inputHandler.IsKeyJustPressed(ebiten.KeyE) && !g.mesero.TienePlato {
 		if g.meseroEnBarra() {
 			if plato, ok := g.service.IntentarRecogerPlato(); ok {
 				g.mesero.RecogerPlato(*plato)
-				g.mostrarNotificacion(fmt.Sprintf("✅ Plato #%d recogido", plato.ID))
+				g.mostrarNotificacion(fmt.Sprintf("Plato #%d recogido", plato.ID))
 			} else {
-				g.mostrarNotificacion("⚠️ No hay platos en la barra")
+				g.mostrarNotificacion("No hay platos en la barra")
 			}
 		} else {
-			g.mostrarNotificacion("⚠️ Acércate a la barra (zona central superior)")
+			g.mostrarNotificacion("Acercate a la barra (zona central superior)")
 		}
 	}
 
-	// Entregar plato con ESPACIO (usar inputHandler IsKeyJustPressed)
+	// Entregar plato con ESPACIO
 	if g.inputHandler.IsKeyJustPressed(ebiten.KeySpace) && g.mesero.TienePlato {
 		if g.service.EntregarPlatoAMesa(g.mesero.PosX, g.mesero.PosY, 100) {
 			delivered := g.mesero.EntregarPlato()
 			if delivered != nil {
-				g.mostrarNotificacion(fmt.Sprintf("✅ Plato #%d entregado a la mesa", delivered.ID))
+				g.mostrarNotificacion(fmt.Sprintf("Plato #%d entregado a la mesa", delivered.ID))
 			} else {
-				g.mostrarNotificacion("✅ Plato entregado a la mesa")
+				g.mostrarNotificacion("Plato entregado a la mesa")
 			}
 		} else {
-			g.mostrarNotificacion("⚠️ Acércate a una mesa con clientes")
+			g.mostrarNotificacion("Acercate a una mesa con clientes")
 		}
 	}
 
@@ -135,13 +141,13 @@ func (g *Game) mostrarNotificacion(mensaje string) {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	// Fondo
-	screen.Fill(color.RGBA{45, 35, 30, 255}) // Marrón oscuro para piso de restaurante
+	// Dibujar piso repetid
+	g.renderer.DibujarPiso(screen, g.width, g.height)
 
 	// Dibujar cocinero en la cocina (arriba a la izquierda)
 	g.renderer.DibujarCocinero(screen, 50, 50)
 
-	// Dibujar barra (zona central superior)
+	// Dibujar barra
 	estadoBarra := g.service.GetEstadoBarra()
 	capacidadBarra := g.service.GetCapacidadBarra()
 	g.renderer.DibujarBarra(screen, float32(g.width/2-200), 80, estadoBarra, capacidadBarra)
@@ -169,33 +175,33 @@ func (g *Game) dibujarUI(screen *ebiten.Image) {
 	y := 15
 
 	// Título
-	ebitenutil.DebugPrintAt(screen, "🍽️ RESTAURANTE CONCURRENTE", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "RESTAURANTE CONCURRENTE", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "Patrón Productor-Consumidor", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "Patron Productor-Consumidor", panelX, y)
 	y += 30
 
 	// Métricas del sistema
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "📊 MÉTRICAS", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "METRICAS", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("📦 Buffer: %d/%d", estadoBarra, capacidadBarra), panelX, y)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Buffer: %d/%d", estadoBarra, capacidadBarra), panelX, y)
 	y += 18
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("🍳 Producidos: %d", totales), panelX, y)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Producidos: %d", totales), panelX, y)
 	y += 18
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("✅ Servidos: %d", servidos), panelX, y)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Servidos: %d", servidos), panelX, y)
 	y += 18
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("❌ Perdidos: %d", perdidos), panelX, y)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Perdidos: %d", perdidos), panelX, y)
 	y += 30
 
 	// Controles
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "🎮 CONTROLES", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "CONTROLES", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
 	ebitenutil.DebugPrintAt(screen, "[WASD] Mover mesero", panelX, y)
 	y += 18
@@ -205,20 +211,20 @@ func (g *Game) dibujarUI(screen *ebiten.Image) {
 	y += 30
 
 	// Estado del mesero
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "👤 ESTADO", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "ESTADO DEL MESERO", panelX, y)
 	y += 20
-	ebitenutil.DebugPrintAt(screen, "═══════════════════════════", panelX, y)
+	ebitenutil.DebugPrintAt(screen, "===========================", panelX, y)
 	y += 20
 	if g.mesero.TienePlato {
-		ebitenutil.DebugPrintAt(screen, "🍽️ Con plato", panelX, y)
+		ebitenutil.DebugPrintAt(screen, "Con plato", panelX, y)
 		y += 18
-		ebitenutil.DebugPrintAt(screen, "→ Busca mesa", panelX, y)
+		ebitenutil.DebugPrintAt(screen, "-> Busca mesa", panelX, y)
 	} else {
-		ebitenutil.DebugPrintAt(screen, "🚶 Libre", panelX, y)
+		ebitenutil.DebugPrintAt(screen, "Libre", panelX, y)
 		y += 18
-		ebitenutil.DebugPrintAt(screen, "→ Ve a barra", panelX, y)
+		ebitenutil.DebugPrintAt(screen, "-> Ve a barra", panelX, y)
 	}
 
 	// NOTIFICACIÓN CENTRAL (si existe)

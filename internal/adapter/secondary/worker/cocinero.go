@@ -33,28 +33,40 @@ func (c *Cocinero) Producir(
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("👨‍🍳 Cocinero %d terminó su turno\n", c.id)
+			fmt.Printf("Cocinero %d terminó su turno\n", c.id)
 			return
 
 		default:
 			// Solo producir si hay demanda (clientes esperando)
 			if !verificarDemanda() {
-				time.Sleep(500 * time.Millisecond)
-				continue
+				// Espera no bloqueante usando select con time.After
+				select {
+				case <-time.After(500 * time.Millisecond):
+					continue
+				case <-ctx.Done():
+					return
+				}
 			}
 
-			// Simular tiempo de cocción (trabajo concurrente)
+			// Simular tiempo de cocción (trabajo concurrente) usando time.After
 			tiempoCoccion := time.Duration(1500+rand.Intn(1000)) * time.Millisecond
-			time.Sleep(tiempoCoccion)
+
+			select {
+			case <-time.After(tiempoCoccion):
+				// Continuar con la producción
+			case <-ctx.Done():
+				return
+			}
 
 			// Crear plato
 			plato := model.NewPlato(platoID, c.id)
 
-			// INTENTAR PONER EN LA BARRA
-			// Si la barra está llena, SE BLOQUEA aquí (comportamiento del patrón)
+			// INTENTAR PONER EN LA BARRA (canal buffered)
+			// Si la barra está llena, SE BLOQUEA aquí hasta que haya espacio
+			// Este es el comportamiento del patrón Productor-Consumidor
 			select {
 			case barra <- plato:
-				fmt.Printf("👨‍🍳 Cocinero %d preparó plato #%d (tiempo: %.1fs)\n",
+				fmt.Printf("Cocinero %d preparó plato #%d (tiempo: %.1fs)\n",
 					c.id, platoID, tiempoCoccion.Seconds())
 				platoID++
 

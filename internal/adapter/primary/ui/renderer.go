@@ -26,7 +26,29 @@ func NewRenderer() (*Renderer, error) {
 	}, nil
 }
 
-func (r *Renderer) DibujarMesa(screen *ebiten.Image, mesa *model.Mesa) {
+// DibujarPiso dibuja el piso repetido (tiled) en toda la pantalla
+func (r *Renderer) DibujarPiso(screen *ebiten.Image, screenWidth, screenHeight int) {
+	if r.assets.Piso == nil {
+		// Fallback: color sólido si no hay imagen
+		screen.Fill(color.RGBA{45, 35, 30, 255})
+		return
+	}
+
+	// Obtener dimensiones del tile de piso
+	tileWidth := r.assets.Piso.Bounds().Dx()
+	tileHeight := r.assets.Piso.Bounds().Dy()
+
+	// Dibujar tiles repetidos para cubrir toda la pantalla
+	for y := 0; y < screenHeight; y += tileHeight {
+		for x := 0; x < screenWidth; x += tileWidth {
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(float64(x), float64(y))
+			screen.DrawImage(r.assets.Piso, op)
+		}
+	}
+}
+
+func (r *Renderer) DibujarMesa(screen *ebiten.Image, mesa model.MesaSnapshot) {
 	x, y := float32(mesa.PosX), float32(mesa.PosY)
 
 	// Dibujar sprite de la mesa
@@ -57,13 +79,13 @@ func (r *Renderer) DibujarMesa(screen *ebiten.Image, mesa *model.Mesa) {
 			ebitenutil.DebugPrintAt(screen, fmt.Sprintf("x%d", mesa.ClientesActivos),
 				int(x-15), int(y-10))
 		} else {
-			// Fallback: emoji
-			ebitenutil.DebugPrintAt(screen, fmt.Sprintf("👥%d", mesa.ClientesActivos),
+			// Fallback: texto simple
+			ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Clientes: %d", mesa.ClientesActivos),
 				int(x+5), int(y+5))
 		}
 
 		// Barra de paciencia
-		paciencia := mesa.GetNivelPaciencia()
+		paciencia := mesa.NivelPaciencia
 		barWidth := float32(60)
 		barHeight := float32(6)
 
@@ -92,7 +114,8 @@ func (r *Renderer) DibujarMesa(screen *ebiten.Image, mesa *model.Mesa) {
 }
 
 func (r *Renderer) DibujarBarra(screen *ebiten.Image, x, y float32, ocupado, capacidad int) {
-	ebitenutil.DebugPrintAt(screen, "📦 BARRA (Buffer Productor-Consumidor)", int(x-50), int(y-30))
+	// Título de la barra - Buffer del patrón Productor-Consumidor
+	ebitenutil.DebugPrintAt(screen, "BARRA", int(x-50), int(y-30))
 	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Platos disponibles: %d/%d", ocupado, capacidad), int(x-50), int(y-15))
 
 	slotWidth := float32(60)
@@ -108,8 +131,9 @@ func (r *Renderer) DibujarBarra(screen *ebiten.Image, x, y float32, ocupado, cap
 			op.GeoM.Scale(scale, scale)
 			op.GeoM.Translate(float64(posX), float64(y))
 
+			// Cambiar tono de color si está vacío (más oscuro)
 			if i >= ocupado {
-				op.ColorScale.ScaleAlpha(0.3) // Transparente si está vacío
+				op.ColorScale.Scale(0.6, 0.6, 0.6, 1.0) // Más oscuro pero no transparente
 			}
 			screen.DrawImage(r.assets.Barra, op)
 		} else {
@@ -159,7 +183,7 @@ func (r *Renderer) DibujarMesero(screen *ebiten.Image, mesero *model.Mesero) {
 		}
 		vector.DrawFilledCircle(screen, x, y, 16, col, false)
 		vector.StrokeCircle(screen, x, y, 16, 2, color.White, false)
-		ebitenutil.DebugPrintAt(screen, "🚶", int(x-8), int(y-8))
+		ebitenutil.DebugPrintAt(screen, "M", int(x-8), int(y-8))
 	}
 
 	// Plato en mano (sprite)
@@ -192,10 +216,11 @@ func (r *Renderer) DibujarCocinero(screen *ebiten.Image, x, y float32) {
 		// Fallback: círculo naranja
 		vector.DrawFilledCircle(screen, x+56, y+56, 20, color.RGBA{255, 140, 0, 255}, false)
 		vector.StrokeCircle(screen, x+56, y+56, 20, 2, color.White, false)
-		ebitenutil.DebugPrintAt(screen, "👨‍🍳", int(x+48), int(y+48))
+		ebitenutil.DebugPrintAt(screen, "C", int(x+48), int(y+48))
 	}
 
-	ebitenutil.DebugPrintAt(screen, "CHEF (Productor)", int(x-10), int(y+120))
+	// Etiqueta: CHEF es el productor en el patrón Productor-Consumidor
+	ebitenutil.DebugPrintAt(screen, "CHEF", int(x-10), int(y+120))
 }
 
 // interpolarColor mezcla dos colores según un factor (0.0 a 1.0)
